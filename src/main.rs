@@ -81,13 +81,12 @@ fn main() {
         "pkg",
     ];
     for mut entry in config {
-        let max_depth = entry.depth;
         entry.exclude.extend(&ignore_dirs);
         for path in entry.include {
             descend(
                 expand(path).as_str(),
                 1,
-                max_depth,
+                entry.depth,
                 &mut repos,
                 &entry.exclude,
                 entry.include_all,
@@ -150,6 +149,7 @@ fn descend(
         if include_this_path {
             output.push(path.to_string());
         }
+        // also include parent
         return include_this_path;
     } else {
         return false;
