@@ -66,16 +66,15 @@ fn main() {
         "pkg",
     ];
     let max_depth = 0;
-    for entry in config {
-        let local_ignore = &mut ignore_dirs.clone();
-        local_ignore.extend(entry.exclude.into_iter());
+    for mut entry in config {
+        entry.exclude.extend(&ignore_dirs);
         for path in entry.include {
-            fill_and_descend(
+            search_git(
                 expand(path).as_str(),
                 0,
                 max_depth,
                 &mut repos,
-                &local_ignore,
+                &entry.exclude,
             );
         }
     }
@@ -118,58 +117,46 @@ fn is_valid_dir(dir_entry: &DirEntry, name: &str, ignore_dirs: &Vec<&str>) -> bo
     true
 }
 
-fn fill_and_descend(
+fn search_git(
     path: &str,
     depth: u32,
     max_depth: u32,
-    repos: &mut Vec<String>,
+    output: &mut Vec<String>,
     ignore_dirs: &Vec<&str>,
 ) -> bool {
     if max_depth != 0 && depth >= max_depth {
         return false;
     }
     let mut include_parent = false;
-    let mut is_git = false;
-    match read_dir(path) {
-        Ok(mut iter) => {
-            let mut next = iter.next();
-            let mut children = vec![];
-            while let Some(Ok(ref dir_entry)) = next {
-                let name = dir_entry
-                    .file_name()
-                    .to_str()
-                    .expect("not utf8 string")
-                    .to_string();
-                let mut str_path = String::from(dir_entry.path().to_str().expect("path err"));
-                if name == ".git" {
-                    // println!("got git! {}", str_path);
-                    include_parent = true;
-                    is_git = true;
-                    str_path.truncate(str_path.len() - 5);
-                    repos.push(str_path.to_string());
-                    break;
-                } else {
-                    if is_valid_dir(&dir_entry, &name, &ignore_dirs) {
-                        // descend further
-                        children.push(str_path);
-                    }
-                };
-                next = iter.next();
+    if let Ok(_) = std::fs::metadata(path.to_string() + "/.git") {
+        // println!("is git {}", path);
+        output.push(path.to_string());
+        return true;
+    } else if let Ok(mut iter) = read_dir(path) {
+        let mut next = iter.next();
+        let mut children = vec![];
+        while let Some(Ok(ref dir_entry)) = next {
+            let name = dir_entry
+                .file_name()
+                .to_str()
+                .expect("not utf8 string")
+                .to_string();
+            if is_valid_dir(&dir_entry, &name, &ignore_dirs) {
+                // descend further
+                children.push(String::from(dir_entry.path().to_str().expect("path err")));
             }
-            if !is_git {
-                for child in children {
-                    if fill_and_descend(child.as_str(), depth + 1, max_depth, repos, ignore_dirs) {
-                        include_parent = true;
-                    };
-                }
-            }
-            if include_parent && !is_git {
-                repos.push(path.to_string());
-            }
-            return include_parent;
+            next = iter.next();
         }
-        Err(_) => {
-            return false;
+        for child in children {
+            if search_git(child.as_str(), depth + 1, max_depth, output, ignore_dirs) {
+                include_parent = true;
+            };
         }
+        if include_parent {
+            output.push(path.to_string());
+        }
+        return include_parent;
+    } else {
+        return false;
     }
 }
