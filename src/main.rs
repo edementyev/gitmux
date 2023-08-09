@@ -8,7 +8,7 @@ use std::{
     time::Instant,
 };
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Default)]
 struct ConfigEntry<'a> {
     #[serde(borrow = "'a")]
     include: Vec<&'a str>,
@@ -22,22 +22,10 @@ struct ConfigEntry<'a> {
     markers: Vec<&'a str>,
 }
 
-impl<'a> Default for ConfigEntry<'a> {
-    fn default() -> Self {
-        ConfigEntry {
-            include: vec![],
-            exclude: vec![],
-            depth: 0,
-            include_all: false,
-            markers: vec![],
-        }
-    }
-}
-
 use std::env;
 
 fn expand(path: &str) -> String {
-    let re = Regex::new(r"\$\{?([^\}\/]+)\}?").expect("invalid regex");
+    let re = Regex::new(r"\$\{?([^\}/]+)\}?").expect("invalid regex");
     let result: String = re
         .replace_all(path, |captures: &Captures| match &captures[1] {
             "" => "".to_string(),
@@ -47,8 +35,8 @@ fn expand(path: &str) -> String {
     result
 }
 
-static APP_NAME: &str = "tmux-repoizer";
-static CONFIG_PATH: &str = "/home/yev/.config/tmux-repoizer/config.json";
+static APP_NAME: &str = "gitmux";
+static CONFIG_PATH: &str = "/home/yev/.config/gitmux/config.json";
 
 static MARKERS: [&str; 2] = [".git", "Cargo.toml"];
 static IGNORE_DIRS: [&str; 11] = [
@@ -108,7 +96,7 @@ fn descend(path: &str, depth: u8, output: &mut Vec<String>, config: &ConfigEntry
     }
     let mut include_this_path = depth == 1 || config.include_all;
     for marker in &config.markers {
-        if let Ok(_) = std::fs::metadata(path.to_string() + "/" + marker) {
+        if std::fs::metadata(path.to_string() + "/" + marker).is_ok() {
             // println!("is git {}", path);
             output.push(path.to_string());
             return true;
@@ -123,7 +111,7 @@ fn descend(path: &str, depth: u8, output: &mut Vec<String>, config: &ConfigEntry
                 .to_str()
                 .expect("not utf8 string")
                 .to_string();
-            if is_valid_dir(&dir_entry, &name, &config.exclude) {
+            if is_valid_dir(dir_entry, &name, &config.exclude) {
                 // descend further
                 children.push(String::from(dir_entry.path().to_str().expect("path err")));
             }
@@ -138,9 +126,9 @@ fn descend(path: &str, depth: u8, output: &mut Vec<String>, config: &ConfigEntry
             output.push(path.to_string());
         }
         // also include parent
-        return include_this_path;
+        include_this_path
     } else {
-        return false;
+        false
     }
 }
 
