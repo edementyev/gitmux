@@ -28,29 +28,12 @@ struct ConfigEntry<'a> {
     markers: Vec<&'a str>,
 }
 
-use std::env;
+use std::env::{self, VarError};
 
 const EMPTY_STR: &str = "";
-// const RUST_LIB_BACKTRACE: &str = "RUST_LIB_BACKTRACE";
 
 static APP_NAME: &str = "gitmux";
 static DEFAULT_CONFIG_PATH: &str = "${XDG_CONFIG_HOME}/gitmux/config.json";
-
-fn main() {
-    match main_() {
-        Ok(_) => {
-            std::process::exit(exitcode::OK);
-        }
-        Err(e) => {
-            eprintln!("{}", e);
-            match e {
-                GitmuxError::Config(_) => std::process::exit(exitcode::CONFIG),
-                GitmuxError::Descend(_) => std::process::exit(exitcode::DATAERR),
-                GitmuxError::Output(_) => std::process::exit(exitcode::IOERR),
-            }
-        }
-    }
-}
 
 #[derive(thiserror::Error, Debug)]
 enum ConfigError {
@@ -63,20 +46,43 @@ enum ConfigError {
 }
 
 #[derive(thiserror::Error, Debug)]
-enum GitmuxError {
+enum ExpandError {
+    #[error("Regex: {0}")]
+    Regex(#[from] regex::Error),
+    #[error("EnvVar: {0}")]
+    EnvVar(#[from] VarError),
+}
+
+#[derive(thiserror::Error, Debug)]
+enum Error {
     #[error("Config error: {0}")]
     Config(#[from] ConfigError),
+    #[error("Expand error: {0}")]
+    Expand(#[from] ExpandError),
     #[error("Descend error: {0}")]
     Descend(#[from] anyhow::Error),
     #[error("Output error: {0}")]
     Output(#[from] std::io::Error),
 }
 
-fn main_() -> Result<(), GitmuxError> {
-    // turn on backtrace for anyhow::Error if it is not explicitly set
-    // if env::var(RUST_LIB_BACKTRACE).is_err() {
-    //     env::set_var(RUST_LIB_BACKTRACE, "1");
-    // }
+fn main() {
+    match _main() {
+        Ok(_) => {
+            std::process::exit(exitcode::OK);
+        }
+        Err(e) => {
+            eprintln!("{}", e);
+            match e {
+                Error::Config(_) => std::process::exit(exitcode::CONFIG),
+                Error::Descend(_) => std::process::exit(exitcode::DATAERR),
+                Error::Expand(_) => std::process::exit(exitcode::DATAERR),
+                Error::Output(_) => std::process::exit(exitcode::IOERR),
+            }
+        }
+    }
+}
+
+fn _main() -> Result<(), Error> {
     // parse cli args
     let cmd = clap::Command::new(APP_NAME).arg(
         Arg::new("config")
@@ -90,18 +96,17 @@ fn main_() -> Result<(), GitmuxError> {
     // TODO: cmd flag to measure each dir walk time
     //
     // ).arg();
-    let matches = cmd.get_matches();
+
     // parse config
-    let p: String = expand(
-        matches
+    let path = expand(
+        cmd.get_matches()
             .get_one::<String>("config")
-            .ok_or(ConfigError::CmdArg(
-                "error: wrong type used for arg --config",
-            ))?,
-    );
-    let file = std::fs::read_to_string(&p)
-        .map_err(|e| ConfigError::ReadPath(format!("error reading path {}: {}", p, e)))?;
-    let config: Config = serde_jsonc::from_str(file.as_str()).map_err(ConfigError::Parse)?;
+            .ok_or_else(|| ConfigError::CmdArg("error: wrong type used for --config"))?,
+    )?;
+    let config_content = std::fs::read_to_string(&path)
+        .map_err(|e| ConfigError::ReadPath(format!("error reading path {}: {}", path, e)))?;
+    let config: Config =
+        serde_jsonc::from_str(config_content.as_str()).map_err(ConfigError::Parse)?;
     trace!("config {:#?}", config);
     let mut output_vec = vec![];
     for mut config_entry in config.entries {
@@ -123,7 +128,7 @@ fn main_() -> Result<(), GitmuxError> {
             config_entry.markers.extend(&config.markers);
         }
         for path in &config_entry.paths {
-            descend_recursive(expand(path).as_str(), 0, &mut output_vec, &config_entry)?;
+            descend_recursive(expand(path)?.as_str(), 0, &mut output_vec, &config_entry)?;
         }
     }
     let mut out = stdout();
@@ -140,7 +145,7 @@ fn descend_recursive(
     depth: u8,
     output: &mut Vec<String>,
     config: &ConfigEntry,
-) -> Result<bool, GitmuxError> {
+) -> Result<bool, Error> {
     if config.depth.is_some() && depth > config.depth.unwrap_or(u8::MAX) {
         return Ok(false);
     }
@@ -160,13 +165,12 @@ fn descend_recursive(
             let name = entry
                 .file_name()
                 .to_str()
-                .ok_or(anyhow!(
-                    "entry is not utf8 string: {:#?}",
-                    entry.file_name()
-                ))?
+                .ok_or_else(|| anyhow!("entry is not utf8 string: {:#?}", entry.file_name()))?
                 .to_string();
-            if is_dir(entry) && !is_dot_dir(&name) && !is_in_ignore(&name, &config.exclude) {
-                children.push(String::from(entry.path().to_str().expect("path err")));
+            if is_dir(entry)? && !is_dot_dir(&name) && !is_in_ignore(&name, &config.exclude) {
+                children.push(String::from(entry.path().to_str().ok_or_else(|| {
+                    anyhow!("entry.path() is not valid utf8: {:#?}", entry.path())
+                })?));
             }
         }
         // walk current dir's children
@@ -187,7 +191,6 @@ fn descend_recursive(
 }
 
 fn is_in_ignore(name: &str, ignore_dirs: &Vec<&str>) -> bool {
-    // not ignored
     for ignore_pat in ignore_dirs {
         if *ignore_pat == name {
             return true;
@@ -196,26 +199,34 @@ fn is_in_ignore(name: &str, ignore_dirs: &Vec<&str>) -> bool {
     false
 }
 
-fn is_dir(entry: &DirEntry) -> bool {
-    entry.file_type().expect("err on file_type").is_dir()
+fn is_dir(entry: &DirEntry) -> Result<bool, std::io::Error> {
+    Ok(entry.file_type()?.is_dir())
 }
 
 fn is_dot_dir(name: &str) -> bool {
-    // not a dot dir
     name.starts_with('.')
 }
 
-fn expand(path: &str) -> String {
-    let re = Regex::new(r"\$\{?([^\}/]+)\}?").expect("invalid regex");
-    let result: String = re
-        .replace_all(path, |captures: &Captures| match &captures[1] {
-            EMPTY_STR => EMPTY_STR.to_string(),
-            varname => {
-                env::var(OsStr::new(varname)).unwrap_or_else(|e| panic!("no such var error: {}", e))
-            }
-        })
-        .into();
-    result
+fn expand(path: &str) -> Result<String, ExpandError> {
+    let re = Regex::new(r"\$\{?([^\}/]+)\}?")?;
+    let caps = re.captures(path);
+    if caps.is_some() {
+        let mut errors: Vec<VarError> = Vec::new();
+        let result: String = re
+            .replace_all(path, |captures: &Captures| match &captures[1] {
+                EMPTY_STR => EMPTY_STR.to_string(),
+                varname => env::var(OsStr::new(varname))
+                    .map_err(|e| errors.push(e))
+                    .unwrap_or_default(),
+            })
+            .into();
+        if let Some(error) = errors.pop() {
+            return Err(ExpandError::EnvVar(error));
+        }
+        Ok(result)
+    } else {
+        Ok(path.to_owned())
+    }
 }
 
 #[allow(dead_code)]
