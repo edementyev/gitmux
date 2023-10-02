@@ -185,20 +185,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6c80984affa11d98d1b88b66ac8853f143217b399d3c74116778ff8fdb4ed2e"
 
 [[package]]
-name = "gitmux"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "clap",
- "exitcode",
- "log",
- "regex",
- "serde",
- "serde_jsonc",
- "thiserror",
-]
-
-[[package]]
 name = "hermit-abi"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -273,6 +259,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03b4680b86d9cfafba8fc491dc9b6df26b68cf40e9e6cd73909194759a63c385"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "pfp"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "exitcode",
+ "log",
+ "regex",
+ "serde",
+ "serde_jsonc",
+ "thiserror",
 ]
 
 [[package]]

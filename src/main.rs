@@ -3,7 +3,8 @@ use clap::{Arg, ArgAction};
 use log::{info, trace};
 use regex::{Captures, Regex};
 use serde::Deserialize;
-use std::io::{stdout, Write};
+use std::io::{Read, Write};
+use std::process::{Command, Stdio};
 use std::{ffi::OsStr, fs::DirEntry, time::Instant};
 
 #[derive(Deserialize, Debug, Default)]
@@ -32,52 +33,31 @@ use std::env::{self, VarError};
 
 const EMPTY_STR: &str = "";
 
-static APP_NAME: &str = "gitmux";
+static APP_NAME: &str = "pfp";
 static DEFAULT_CONFIG_PATH: &str = "${XDG_CONFIG_HOME}/gitmux/config.json";
 
 #[derive(thiserror::Error, Debug)]
-enum ConfigError {
-    #[error("Parse: {0}")]
-    Parse(#[from] serde_jsonc::Error),
-    #[error("Cmd arguments: {0}")]
-    CmdArg(&'static str),
-    #[error("Read path: {0}")]
-    ReadPath(String),
-}
-
-#[derive(thiserror::Error, Debug)]
-enum ExpandError {
-    #[error("Regex: {0}")]
-    Regex(#[from] regex::Error),
-    #[error("EnvVar: {0}")]
-    EnvVar(#[from] VarError),
-}
-
-#[derive(thiserror::Error, Debug)]
 enum Error {
-    #[error("Config error: {0}")]
-    Config(#[from] ConfigError),
-    #[error("Expand error: {0}")]
-    Expand(#[from] ExpandError),
+    #[error("Parse config error: {0}")]
+    ParseConfig(#[from] serde_jsonc::Error),
+    #[error("Cmd arguments error: {0}")]
+    CmdArg(&'static str),
     #[error("Descend error: {0}")]
     Descend(#[from] anyhow::Error),
     #[error("Output error: {0}")]
     Output(#[from] std::io::Error),
+    #[error("Regex error: {0}")]
+    Regex(#[from] regex::Error),
+    #[error("Env var error: {0}")]
+    EnvVar(#[from] VarError),
 }
 
 fn main() {
     match _main() {
-        Ok(_) => {
-            std::process::exit(exitcode::OK);
-        }
-        Err(e) => {
-            eprintln!("{}", e);
-            match e {
-                Error::Config(_) => std::process::exit(exitcode::CONFIG),
-                Error::Descend(_) => std::process::exit(exitcode::DATAERR),
-                Error::Expand(_) => std::process::exit(exitcode::DATAERR),
-                Error::Output(_) => std::process::exit(exitcode::IOERR),
-            }
+        Ok(_) => std::process::exit(exitcode::OK),
+        Err(error) => {
+            eprintln!("{}", error);
+            std::process::exit(exitcode::DATAERR);
         }
     }
 }
@@ -96,19 +76,54 @@ fn _main() -> Result<(), Error> {
     // TODO: cmd flag to measure each dir walk time
     //
     // ).arg();
-
-    // parse config
-    let path = expand(
+    let config_path = expand(
         cmd.get_matches()
             .get_one::<String>("config")
-            .ok_or_else(|| ConfigError::CmdArg("error: wrong type used for --config"))?,
+            .ok_or_else(|| Error::CmdArg("error: wrong type used for --config"))?,
     )?;
-    let config_content = std::fs::read_to_string(&path)
-        .map_err(|e| ConfigError::ReadPath(format!("error reading path {}: {}", path, e)))?;
-    let config: Config =
-        serde_jsonc::from_str(config_content.as_str()).map_err(ConfigError::Parse)?;
+    // parse config
+    let config_content = std::fs::read_to_string(config_path)?;
+    let config: Config = serde_jsonc::from_str(&config_content)?;
     trace!("config {:#?}", config);
-    let mut output_vec = vec![];
+
+    let dir_list = get_dir_list(config)?;
+
+    let pick = fuzzy_pick_from(dir_list)?;
+    if pick.is_empty() {
+        println!("Empty pick");
+        std::process::exit(exitcode::OK)
+    } else {
+        trace!("{}", pick);
+    }
+
+    tmux_pane(pick.clone(), get_pane_name(pick)?)?;
+    Ok(())
+}
+
+fn expand(path: &str) -> Result<String, Error> {
+    let re = Regex::new(r"\$\{?([^\}/]+)\}?")?;
+    let caps = re.captures(path);
+    if caps.is_some() {
+        let mut errors: Vec<VarError> = Vec::new();
+        let result: String = re
+            .replace_all(path, |captures: &Captures| match &captures[1] {
+                EMPTY_STR => EMPTY_STR.to_string(),
+                varname => env::var(OsStr::new(varname))
+                    .map_err(|e| errors.push(e))
+                    .unwrap_or_default(),
+            })
+            .into();
+        if let Some(error) = errors.pop() {
+            return Err(Error::EnvVar(error));
+        }
+        Ok(result)
+    } else {
+        Ok(path.to_owned())
+    }
+}
+
+fn get_dir_list(config: Config) -> Result<String, Error> {
+    let mut out = vec![];
     for mut config_entry in config.entries {
         // exclude and markers behaviour:
         // use root list if current entry does not have it's own list
@@ -128,16 +143,10 @@ fn _main() -> Result<(), Error> {
             config_entry.markers.extend(&config.markers);
         }
         for path in &config_entry.paths {
-            descend_recursive(expand(path)?.as_str(), 0, &mut output_vec, &config_entry)?;
+            descend_recursive(expand(path)?.as_str(), 0, &mut out, &config_entry)?;
         }
     }
-    let mut out = stdout();
-    let mut output: String = EMPTY_STR.to_string();
-    for r in output_vec {
-        output += (r + "\n").as_str();
-    }
-    trace!("output {:#?}", output);
-    Ok(out.write_fmt(format_args!("{}", output))?)
+    Ok(out.join("\n"))
 }
 
 fn descend_recursive(
@@ -207,26 +216,65 @@ fn is_dot_dir(name: &str) -> bool {
     name.starts_with('.')
 }
 
-fn expand(path: &str) -> Result<String, ExpandError> {
-    let re = Regex::new(r"\$\{?([^\}/]+)\}?")?;
-    let caps = re.captures(path);
-    if caps.is_some() {
-        let mut errors: Vec<VarError> = Vec::new();
-        let result: String = re
-            .replace_all(path, |captures: &Captures| match &captures[1] {
-                EMPTY_STR => EMPTY_STR.to_string(),
-                varname => env::var(OsStr::new(varname))
-                    .map_err(|e| errors.push(e))
-                    .unwrap_or_default(),
-            })
-            .into();
-        if let Some(error) = errors.pop() {
-            return Err(ExpandError::EnvVar(error));
-        }
-        Ok(result)
-    } else {
-        Ok(path.to_owned())
+fn fuzzy_pick_from(s: String) -> Result<String, std::io::Error> {
+    let mut result = String::new();
+    let mut cmd = Command::new("fzf")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .arg("--preview")
+        .arg("'tree -C {}'")
+        .spawn()?;
+    {
+        let stdin = cmd.stdin.as_mut().unwrap();
+        stdin.write_all(s.as_bytes())?;
+        let stdout = cmd.stdout.as_mut().unwrap();
+        stdout.read_to_string(&mut result)?;
+        cmd.wait()?;
     }
+    Ok(result.trim_end().to_owned())
+}
+
+fn get_parent_path_name(path: &str) -> Result<String, anyhow::Error> {
+    let mut result = String::new();
+    let mut cmd = Command::new("realpath")
+        .stdout(Stdio::piped())
+        .arg(path.to_owned() + "/../../")
+        .spawn()?;
+    {
+        let stdout = cmd.stdout.as_mut().unwrap();
+        stdout.read_to_string(&mut result)?;
+        cmd.wait()?;
+    }
+    Ok(result.trim_end().to_owned())
+}
+
+fn get_pane_name(path: String) -> Result<String, anyhow::Error> {
+    let mut result = String::new();
+    let parent_path = get_parent_path_name(&path)?;
+    let mut cmd = Command::new("realpath")
+        .stdout(Stdio::piped())
+        .arg(format!("--relative-to={}", parent_path))
+        .arg(path)
+        .spawn()?;
+    {
+        let stdout = cmd.stdout.as_mut().unwrap();
+        stdout.read_to_string(&mut result)?;
+        cmd.wait()?;
+    }
+    // TODO: trim first part of path to 4 characters
+    Ok(result)
+}
+
+fn tmux_pane(path: String, name: String) -> Result<(), anyhow::Error> {
+    let mut cmd = Command::new("tmux")
+        .arg("neww")
+        .args(["-c", &path])
+        .args(["-n", &name])
+        .spawn()?;
+    {
+        cmd.wait()?;
+    }
+    Ok(())
 }
 
 #[allow(dead_code)]
