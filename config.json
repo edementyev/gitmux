@@ -13,32 +13,9 @@
     "docs",
     "pkg"
   ],
-  "entries": [
+  "include": [
     {
-      "paths": ["$HOME/dev", "$HOME/dev/sbl/operator-catalogs/test"],
-      "exclude": ["*", "keebs", "nvim", "aur"]
-    },
-    {
-      "paths": ["$HOME/dev/keebs"],
-      "depth": 1,
-      "include_all": true
-    },
-    {
-      "paths": ["$HOME/dev/sbl/rest"],
-      "depth": 0,
-      "include_all": true
-    },
-    { "paths": ["$HOME/dev/nvim/plugins"] },
-    { "paths": ["$HOME/dev/nvim/neovim"], "depth": 0 },
-    {
-      "paths": ["$HOME/bin", "$HOME/.cache", "$HOME/.config"],
-      "depth": 1,
-      "include_all": true
-    },
-    {
-      "paths": ["$HOME/.local"],
-      "depth": 2,
-      "include_all": true
+      "paths": ["$HOME"]
     }
   ]
 }
