@@ -221,10 +221,9 @@ fn fuzzy_pick_from(s: String) -> Result<String, std::io::Error> {
     let mut cmd = Command::new("fzf")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        // TODO: preview not working (spawning external process)
-        //
-        // .arg("--preview='tree -C {}'")
-        // .arg("--preview='{}'")
+        .args(["--layout", "reverse"])
+        .args(["--preview", "tree -C '{}'"])
+        .args(["--preview-window", "right:nohidden"])
         .spawn()?;
     {
         let stdin = cmd.stdin.as_mut().unwrap();
