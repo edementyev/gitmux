@@ -85,7 +85,7 @@ fn exec() -> Result<(), Error> {
         trace!("{}", pick);
     }
 
-    tmux_pane(pick.clone(), get_pane_name(pick)?)?;
+    tmux_pane(&pick, &get_pane_name(&pick)?)?;
     Ok(())
 }
 
@@ -107,15 +107,15 @@ fn expand(path: &str) -> Result<String, Error> {
 }
 
 fn get_dir_list(config: Config) -> Result<String, Error> {
-    let mut out = vec![];
+    let mut list = vec![];
     for include_entry in config.include.iter() {
         for path in &include_entry.paths {
             let expanded_path = expand(path)?;
-            out.push(expanded_path.clone());
-            descend_recursive(&expanded_path, 0, &mut out, include_entry, &config)?;
+            list.push(expanded_path.clone());
+            descend_recursive(&expanded_path, 0, &mut list, include_entry, &config)?;
         }
     }
-    Ok(out.join("\n"))
+    Ok(list.join("\n"))
 }
 
 fn descend_recursive(
@@ -128,14 +128,15 @@ fn descend_recursive(
     // always include start of the tree
     let mut include_this_path = false;
     if !include_this_path {
-        let markers_chain = include_entry
-            .markers
-            .iter()
-            .chain(if include_entry.use_root_markers {
-                config.markers.iter()
-            } else {
-                [].iter()
-            });
+        let markers_chain =
+            include_entry
+                .markers
+                .iter()
+                .chain(if include_entry.use_root_markers {
+                    config.markers.iter()
+                } else {
+                    [].iter()
+                });
         // search current dir for markers
         for marker in markers_chain {
             if *marker == "*" || std::fs::metadata(format!("{}/{}", path, marker)).is_ok() {
@@ -216,7 +217,7 @@ fn is_dot_dir(name: &str) -> bool {
     name.starts_with('.')
 }
 
-fn fuzzy_pick_from(s: String) -> Result<String, std::io::Error> {
+fn fuzzy_pick_from(dir_list: String) -> Result<String, std::io::Error> {
     let mut result = String::new();
     let mut cmd = Command::new("fzf")
         .stdin(Stdio::piped())
@@ -227,7 +228,7 @@ fn fuzzy_pick_from(s: String) -> Result<String, std::io::Error> {
         .spawn()?;
     {
         let stdin = cmd.stdin.as_mut().unwrap();
-        stdin.write_all(s.as_bytes())?;
+        stdin.write_all(dir_list.as_bytes())?;
         let stdout = cmd.stdout.as_mut().unwrap();
         stdout.read_to_string(&mut result)?;
         cmd.wait()?;
@@ -235,23 +236,25 @@ fn fuzzy_pick_from(s: String) -> Result<String, std::io::Error> {
     Ok(result.trim_end().to_owned())
 }
 
-fn get_pane_name(path: String) -> Result<String, anyhow::Error> {
+fn get_pane_name(path: &str) -> Result<String, anyhow::Error> {
     let re = Regex::new(r"/(?P<first>[^/]+)/{1}(?P<second>[^/]+)$")?;
-    if let Some(caps) = re.captures_iter(&path).next() {
-        return Ok(format!(
+    let mut iter = re.captures_iter(path);
+    if let Some(caps) = iter.next() {
+        Ok(format!(
             "{}/{}",
             caps["first"].chars().take(4).collect::<String>(),
             &caps["second"]
-        ));
+        ))
+    } else {
+        Ok(path.to_string())
     }
-    Ok(path)
 }
 
-fn tmux_pane(path: String, name: String) -> Result<(), anyhow::Error> {
+fn tmux_pane(path: &str, name: &str) -> Result<(), anyhow::Error> {
     let mut cmd = Command::new("tmux")
         .arg("neww")
-        .args(["-c", &path])
-        .args(["-n", &name])
+        .args(["-c", path])
+        .args(["-n", name])
         .spawn()?;
     {
         cmd.wait()?;
