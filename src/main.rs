@@ -1,10 +1,9 @@
 mod config;
 
-use crate::config::{read_config, Config};
+use crate::config::{Config, ConfigError, IncludeEntry};
 
 use anyhow::anyhow;
 use clap::{Arg, ArgAction};
-use config::{ConfigError, IncludeEntry};
 use log::{info, trace};
 use regex::{Captures, Regex};
 
@@ -27,8 +26,10 @@ enum Error {
     CmdArg(&'static str),
     #[error("Descend error: {0}")]
     Descend(#[from] anyhow::Error),
-    #[error("Output error: {0}")]
-    Output(#[from] std::io::Error),
+    #[error("IO error: {0}")]
+    IO(#[from] std::io::Error),
+    #[error("Unwrap IO stream error: {0}")]
+    UnwrapIOStream(&'static str),
     #[error("Regex error: {0}")]
     Regex(#[from] regex::Error),
     #[error("Env var error: {0}: {1}")]
@@ -43,50 +44,6 @@ fn main() {
             std::process::exit(exitcode::DATAERR);
         }
     }
-}
-
-fn exec() -> Result<(), Error> {
-    // parse cli args
-    let cmd = clap::Command::new(APP_NAME).arg(
-        Arg::new("config")
-            .short('c')
-            .long("config")
-            .action(ArgAction::Set)
-            .default_value(CONFIG_PATH_DEFAULT)
-            .value_name("FILE")
-            .help("config file full path"),
-    );
-    let config_path = expand(
-        cmd.get_matches()
-            .get_one::<String>("config")
-            .ok_or_else(|| Error::CmdArg("error: wrong type used for --config"))?,
-    )?;
-    let config_result = read_config(&config_path);
-    let config = if config_result.is_err() && config_path == CONFIG_PATH_DEFAULT {
-        // default value is used for --config and it does not exist in file system
-        // -> use default config value
-        config_result
-            .map_err(|e| println!("{}, config path={}, using default config", e, config_path))
-            .unwrap_or_default()
-    } else {
-        // either read_config succeeded, or it failed with provided custom --config path
-        // -> continue or propagate error
-        config_result?
-    };
-    trace!("config {:#?}", config);
-
-    let dir_list = get_dir_list(config)?;
-
-    let pick = fuzzy_pick_from(dir_list)?;
-    if pick.is_empty() {
-        trace!("Empty pick");
-        std::process::exit(exitcode::OK)
-    } else {
-        trace!("{}", pick);
-    }
-
-    tmux_pane(&pick, &get_pane_name(&pick)?)?;
-    Ok(())
 }
 
 fn expand(path: &str) -> Result<String, Error> {
@@ -106,16 +63,113 @@ fn expand(path: &str) -> Result<String, Error> {
     Ok(result)
 }
 
-fn get_dir_list(config: Config) -> Result<String, Error> {
-    let mut list = vec![];
-    for include_entry in config.include.iter() {
-        for path in &include_entry.paths {
-            let expanded_path = expand(path)?;
-            list.push(expanded_path.clone());
-            descend_recursive(&expanded_path, 0, &mut list, include_entry, &config)?;
+fn exec() -> Result<(), Error> {
+    // parse cli args
+    let cmd = clap::Command::new(APP_NAME).arg(
+        Arg::new("config")
+            .short('c')
+            .long("config")
+            .action(ArgAction::Set)
+            .default_value(CONFIG_PATH_DEFAULT)
+            .value_name("FILE")
+            .help("config file full path"),
+    );
+
+    let path = expand(
+        cmd.get_matches()
+            .get_one::<String>("config")
+            .ok_or_else(|| Error::CmdArg("error: wrong type used for --config"))?,
+    )?;
+
+    let config = {
+        fn parse_config(path: &str) -> Result<Config, ConfigError> {
+            let contents = Box::leak(Box::new(std::fs::read_to_string(path)?));
+            let cfg: Config = serde_jsonc::from_str(contents)?;
+            Ok(cfg)
         }
+        let cfg = parse_config(&path);
+        if cfg.is_err() && path == CONFIG_PATH_DEFAULT {
+            // default value is used for --config and it does not exist in file system
+            // -> use default config value
+            cfg.map_err(|e| println!("{}, config path={}, using default config", e, path))
+                .unwrap_or_default()
+        } else {
+            // either read_config succeeded, or it failed with provided custom --config path
+            // -> continue or propagate error
+            cfg?
+        }
+    };
+    trace!("config {:#?}", config);
+
+    // get dirs' paths
+    let dirs = {
+        let mut list = vec![];
+        for include_entry in config.include.iter() {
+            for path in &include_entry.paths {
+                let expanded_path = expand(path)?;
+                // always include root of the tree
+                list.push(expanded_path.clone());
+                descend_recursive(&expanded_path, 0, &mut list, include_entry, &config)?;
+            }
+        }
+        list.join("\n")
+    };
+
+    // pick one from list with fzf
+    let pick = {
+        let mut result = String::new();
+        let mut cmd = Command::new("fzf")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .args(["--layout", "reverse"])
+            .args(["--preview", "tree -C '{}'"])
+            .args(["--preview-window", "right:nohidden"])
+            .spawn()?;
+        {
+            let stdin = cmd
+                .stdin
+                .as_mut()
+                .ok_or_else(|| Error::UnwrapIOStream("Could not get cmd.stdin"))?;
+            stdin.write_all(dirs.as_bytes())?;
+            let stdout = cmd
+                .stdout
+                .as_mut()
+                .ok_or_else(|| Error::UnwrapIOStream("Could not get cmd.stdout"))?;
+            stdout.read_to_string(&mut result)?;
+            cmd.wait()?;
+        }
+        result = result.trim_end().to_owned();
+        if result.is_empty() {
+            trace!("Empty pick");
+            std::process::exit(exitcode::OK)
+        } else {
+            trace!("{}", result);
+            result
+        }
+    };
+
+    // spawn tmux pane
+    Command::new("tmux")
+        .arg("neww")
+        .args(["-c", &pick])
+        .args(["-n", &get_pane_name(&pick)?])
+        .spawn()?
+        .wait()?;
+    Ok(())
+}
+
+fn get_pane_name(path: &str) -> Result<String, anyhow::Error> {
+    let re = Regex::new(r"/(?P<first>[^/]+)/{1}(?P<second>[^/]+)$")?;
+    let mut iter = re.captures_iter(path);
+    if let Some(caps) = iter.next() {
+        Ok(format!(
+            "{}/{}",
+            caps["first"].chars().take(4).collect::<String>(),
+            &caps["second"]
+        ))
+    } else {
+        Ok(path.to_string())
     }
-    Ok(list.join("\n"))
 }
 
 fn descend_recursive(
@@ -125,7 +179,6 @@ fn descend_recursive(
     include_entry: &IncludeEntry,
     config: &Config,
 ) -> Result<bool, Error> {
-    // always include start of the tree
     let mut include_this_path = false;
     if !include_this_path {
         let markers_chain =
@@ -215,51 +268,6 @@ fn is_dir(entry: &DirEntry) -> Result<bool, std::io::Error> {
 
 fn is_dot_dir(name: &str) -> bool {
     name.starts_with('.')
-}
-
-fn fuzzy_pick_from(dir_list: String) -> Result<String, std::io::Error> {
-    let mut result = String::new();
-    let mut cmd = Command::new("fzf")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .args(["--layout", "reverse"])
-        .args(["--preview", "tree -C '{}'"])
-        .args(["--preview-window", "right:nohidden"])
-        .spawn()?;
-    {
-        let stdin = cmd.stdin.as_mut().unwrap();
-        stdin.write_all(dir_list.as_bytes())?;
-        let stdout = cmd.stdout.as_mut().unwrap();
-        stdout.read_to_string(&mut result)?;
-        cmd.wait()?;
-    }
-    Ok(result.trim_end().to_owned())
-}
-
-fn get_pane_name(path: &str) -> Result<String, anyhow::Error> {
-    let re = Regex::new(r"/(?P<first>[^/]+)/{1}(?P<second>[^/]+)$")?;
-    let mut iter = re.captures_iter(path);
-    if let Some(caps) = iter.next() {
-        Ok(format!(
-            "{}/{}",
-            caps["first"].chars().take(4).collect::<String>(),
-            &caps["second"]
-        ))
-    } else {
-        Ok(path.to_string())
-    }
-}
-
-fn tmux_pane(path: &str, name: &str) -> Result<(), anyhow::Error> {
-    let mut cmd = Command::new("tmux")
-        .arg("neww")
-        .args(["-c", path])
-        .args(["-n", name])
-        .spawn()?;
-    {
-        cmd.wait()?;
-    }
-    Ok(())
 }
 
 #[allow(dead_code)]

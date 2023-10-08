@@ -98,9 +98,3 @@ impl<'a> Default for Config<'a> {
         }
     }
 }
-
-pub(crate) fn read_config(path: &str) -> Result<Config, ConfigError> {
-    let config_content = Box::leak(Box::new(std::fs::read_to_string(path)?));
-    let config: Config = serde_jsonc::from_str(config_content)?;
-    Ok(config)
-}
