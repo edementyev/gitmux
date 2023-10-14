@@ -153,6 +153,10 @@ fn cli() -> Result<(), Error> {
                 &[
                     "--layout",
                     "reverse",
+                    "--preview",
+                    "tmux capture-pane -ept {}",
+                    "--preview-window",
+                    "right:nohidden",
                     "--sync",
                     "--bind",
                     &format!("load:pos({})", idx + 1),
@@ -178,7 +182,31 @@ fn cli() -> Result<(), Error> {
                     .collect::<Vec<&str>>()
                     .join("\n"),
                 "Start sessions:",
-                &["-m", "--layout", "reverse"],
+                &[
+                    "-m",
+                    "--layout",
+                    "reverse",
+                    "--preview",
+                    &format!(
+                        "echo '{}' | grep {{}}",
+                        config
+                            .sessions
+                            .iter()
+                            .map(|s| format!(
+                                "{}: {}",
+                                s.name,
+                                s.windows
+                                    .iter()
+                                    .map(|p| expand(p).unwrap_or(p.to_string()))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    ),
+                    "--preview-window",
+                    "right:nohidden",
+                ],
             )?;
             let picked_sessions = pick.split('\n').filter(|x| !x.is_empty()).collect::<Vec<&str>>();
             for session in config.sessions {
@@ -192,7 +220,7 @@ fn cli() -> Result<(), Error> {
                         println!("session {} exists", session.name);
                         continue;
                     }
-                    let mut iter = session.panes.iter();
+                    let mut iter = session.windows.iter();
                     let home = expand("$HOME")?;
                     let home_as_str = home.as_str();
                     let first_pane = &expand(iter.next().unwrap_or(&home_as_str))?;

@@ -28,7 +28,7 @@ pub(crate) struct Config<'a> {
 #[derive(Deserialize, Debug)]
 pub(crate) struct Session<'a> {
     pub name: &'a str,
-    pub panes: Vec<&'a str>,
+    pub windows: Vec<&'a str>,
 }
 
 #[derive(Deserialize, Debug, Default)]
