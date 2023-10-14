@@ -6,10 +6,14 @@ pub(crate) enum ConfigError {
     Parse(#[from] serde_jsonc::Error),
     #[error("Read config: {0}")]
     Read(#[from] std::io::Error),
+    // #[error("Invalid value: {0}")]
+    // InvalidValue(String),
 }
 
 #[derive(Deserialize, Debug)]
 pub(crate) struct Config<'a> {
+    #[serde(default)]
+    pub sessions: Vec<Session<'a>>,
     #[serde(default = "IncludeEntry::markers_default", borrow = "'a")]
     pub markers: Vec<&'a str>,
     #[serde(default = "IncludeEntry::ignore_default")]
@@ -19,6 +23,12 @@ pub(crate) struct Config<'a> {
     #[serde(default = "IncludeEntry::stop_on_match_default")]
     pub stop_on_match: bool,
     pub include: Vec<IncludeEntry<'a>>,
+}
+
+#[derive(Deserialize, Debug)]
+pub(crate) struct Session<'a> {
+    pub name: &'a str,
+    pub panes: Vec<&'a str>,
 }
 
 #[derive(Deserialize, Debug, Default)]
@@ -87,6 +97,7 @@ impl<'a> IncludeEntry<'a> {
 impl<'a> Default for Config<'a> {
     fn default() -> Self {
         Self {
+            sessions: vec![],
             markers: IncludeEntry::markers_default(),
             ignore: IncludeEntry::ignore_default(),
             traverse_hidden: IncludeEntry::traverse_hidden_default(),
@@ -97,4 +108,9 @@ impl<'a> Default for Config<'a> {
             }],
         }
     }
+}
+
+pub(crate) fn read_config(path: &str) -> Result<Config, ConfigError> {
+    let contents = Box::leak(Box::new(std::fs::read_to_string(path)?));
+    Ok(serde_jsonc::from_str(contents)?)
 }
