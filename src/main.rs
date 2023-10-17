@@ -4,7 +4,7 @@ mod fzf;
 mod selectors;
 mod tmux;
 
-use crate::config::{read_config, ConfigError};
+use crate::config::{read_config, ConfigError, Session};
 use crate::fs::{expand, get_pane_name};
 use crate::selectors::{pick_from, pick_project};
 use crate::tmux::{execute_tmux_command, execute_tmux_command_with_stdin};
@@ -188,19 +188,11 @@ fn cli() -> Result<(), Error> {
                     "reverse",
                     "--preview",
                     &format!(
-                        "echo '{}' | grep {{}}",
+                        "echo '{}'",
                         config
                             .sessions
                             .iter()
-                            .map(|s| format!(
-                                "{}: {}",
-                                s.name,
-                                s.windows
-                                    .iter()
-                                    .map(|p| expand(p).unwrap_or(p.to_string()))
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            ))
+                            .map(Session::to_string)
                             .collect::<Vec<_>>()
                             .join("\n")
                     ),

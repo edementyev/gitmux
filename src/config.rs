@@ -31,6 +31,20 @@ pub(crate) struct Session<'a> {
     pub windows: Vec<&'a str>,
 }
 
+impl<'a> ToString for Session<'a> {
+    fn to_string(&self) -> String {
+        format!(
+            "{}:\n{}\n",
+            self.name,
+            self.windows
+                .iter()
+                .map(|p| crate::fs::expand(p).unwrap_or(p.to_string()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    }
+}
+
 #[derive(Deserialize, Debug, Default)]
 pub(crate) struct IncludeEntry<'a> {
     #[serde(borrow = "'a")]
