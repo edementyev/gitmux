@@ -43,6 +43,12 @@ pub(crate) fn get_pane_name(path: &str) -> Result<String, anyhow::Error> {
     }
 }
 
+pub(crate) fn get_session_name(pane_name: &String) -> String {
+    let mut s = String::from(pane_name);
+    s.retain(|x| x != '.');
+    s
+}
+
 pub(crate) fn descend_recursive(
     path: &str,
     depth: u8,

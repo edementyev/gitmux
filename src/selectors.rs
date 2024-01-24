@@ -7,7 +7,7 @@ use crate::{
     Error,
 };
 
-pub(crate) fn pick_from(list: &str, header: &'static str, args: &[&str]) -> Result<String, crate::Error> {
+pub(crate) fn select_from_list(list: &str, header: &'static str, args: &[&str]) -> Result<String, crate::Error> {
     let result = execute_fzf_command(args.iter().chain(&["--header", header]).cloned(), list)?;
     if result.is_empty() {
         trace!("Empty pick");
@@ -34,7 +34,7 @@ pub(crate) fn pick_project(config: &Config) -> Result<String, Error> {
     };
 
     // pick one from list with fzf
-    let pick = pick_from(
+    let pick = select_from_list(
         &dirs,
         "Projects:",
         &[

@@ -6,8 +6,6 @@ pub(crate) enum ConfigError {
     Parse(#[from] serde_jsonc::Error),
     #[error("Read config: {0}")]
     Read(#[from] std::io::Error),
-    // #[error("Invalid value: {0}")]
-    // InvalidValue(String),
 }
 
 #[derive(Deserialize, Debug)]
