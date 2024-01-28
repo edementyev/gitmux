@@ -217,7 +217,7 @@ pub(crate) fn cli() -> Result<(), super::Error> {
             execute_tmux_command_with_stdin("tmux attach", stdin_opt)?;
         }
         Some((NEW_PANE_SUBC, _)) => {
-            let pick = pick_project(&config)?;
+            let pick = pick_project(&config, "New pane:")?;
             execute_tmux_command(&format!(
                 "tmux new-window -n {} -c {}",
                 &get_pane_name(&pick)?,
@@ -225,7 +225,7 @@ pub(crate) fn cli() -> Result<(), super::Error> {
             ))?;
         }
         Some((NEW_SESSION_SUBC, _)) => {
-            let pick = pick_project(&config)?;
+            let pick = pick_project(&config, "New session:")?;
             // spawn tmux session
             let mut pane_name = get_pane_name(&pick)?;
             let session_name = get_session_name(&pane_name);
