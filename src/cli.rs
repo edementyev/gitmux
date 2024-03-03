@@ -2,9 +2,9 @@ use log::trace;
 use std::process;
 
 use crate::config::{read_config, Session};
-use crate::fs::{expand, get_pane_name, get_session_name};
+use crate::fs::{expand_path, trim_pane_name, trim_session_name};
 use crate::selectors::{pick_project, select_from_list};
-use crate::tmux::{execute_tmux_command, execute_tmux_command_with_stdin};
+use crate::tmux::{execute_tmux_command, execute_tmux_command_with_stdin, execute_tmux_window_command};
 
 use clap::{Arg, ArgAction};
 
@@ -15,7 +15,7 @@ const KILL_SESSION_SUBC: &str = "kill-session";
 const SESSIONS_SUBC: &str = "sessions";
 const START_SUBC: &str = "start";
 const NEW_SESSION_SUBC: &str = "new-session";
-const NEW_PANE_SUBC: &str = "new-pane";
+const NEW_WINDOW_SUBC: &str = "new-window";
 
 const CONFIG_ARG: &str = "config";
 const START_INHERIT_STDIN_ARG: &str = "attach"; // inherit stdin
@@ -23,7 +23,7 @@ const START_INHERIT_STDIN_ARG: &str = "attach"; // inherit stdin
 pub(crate) fn cli() -> Result<(), super::Error> {
     // parse cli args
     let mut cmd = clap::Command::new(APP_NAME)
-        .about("Pfp helps you manage your projects with tmux sessions and panes")
+        .about("Pfp helps you manage your projects with tmux sessions and windows")
         .arg(
             Arg::new(CONFIG_ARG)
                 .short('c')
@@ -34,7 +34,7 @@ pub(crate) fn cli() -> Result<(), super::Error> {
                 .help("config file full path"),
         )
         .subcommand(clap::Command::new(NEW_SESSION_SUBC).about("Pick a path and create new tmux session"))
-        .subcommand(clap::Command::new(NEW_PANE_SUBC).about("Pick a path and create new tmux window"))
+        .subcommand(clap::Command::new(NEW_WINDOW_SUBC).about("Pick a path and create new tmux window"))
         .subcommand(
             clap::Command::new(KILL_SESSION_SUBC)
                 .about("Kill current session and switch to last/previous session"),
@@ -58,7 +58,7 @@ pub(crate) fn cli() -> Result<(), super::Error> {
     let help = cmd.render_help();
     let arg_matches = cmd.get_matches();
 
-    let path = expand(
+    let path = expand_path(
         arg_matches
             .get_one::<String>(CONFIG_ARG)
             .ok_or_else(|| super::Error::CmdArg(format!("error: wrong type used for {}", CONFIG_ARG)))?,
@@ -182,23 +182,29 @@ pub(crate) fn cli() -> Result<(), super::Error> {
                         continue;
                     }
                     let mut iter = session.windows.iter();
-                    let home = expand("$HOME")?;
-                    let first_pane = &expand(iter.next().unwrap_or(&home.as_str()))?;
+                    let home = expand_path("$HOME")?;
+                    let first_pane = &expand_path(iter.next().unwrap_or(&home.as_str()))?;
                     // create session with first window
-                    execute_tmux_command(&format!(
-                        "tmux new-session -d -s {} -n {} -c {}",
-                        session.name,
-                        get_pane_name(first_pane)?,
+                    execute_tmux_window_command(
+                        &format!(
+                            "tmux new-session -d -s {} -n {} -c {}",
+                            session.name,
+                            trim_pane_name(first_pane)?,
+                            first_pane,
+                        ),
                         first_pane,
-                    ))?;
+                    )?;
                     for pane in iter {
-                        let pane = &expand(pane)?;
+                        let pane = &expand_path(pane)?;
                         let mut window = String::from_utf8(
-                            execute_tmux_command(&format!(
-                                "tmux new-window -d -n {} -c {} -P -F '#S:#I'",
-                                get_pane_name(pane)?,
+                            execute_tmux_window_command(
+                                &format!(
+                                    "tmux new-window -d -n {} -c {} -P -F '#S:#I'",
+                                    trim_pane_name(pane)?,
+                                    pane,
+                                ),
                                 pane,
-                            ))?
+                            )?
                             .stdout,
                         )?;
                         window.retain(|x| x != '\'' && x != '\n');
@@ -216,23 +222,25 @@ pub(crate) fn cli() -> Result<(), super::Error> {
             }
             execute_tmux_command_with_stdin("tmux attach", stdin_opt)?;
         }
-        Some((NEW_PANE_SUBC, _)) => {
-            let pick = pick_project(&config, "New pane:")?;
-            execute_tmux_command(&format!(
-                "tmux new-window -n {} -c {}",
-                &get_pane_name(&pick)?,
-                &pick
-            ))?;
+        Some((NEW_WINDOW_SUBC, _)) => {
+            let pick = pick_project(&config, "New window:")?;
+            execute_tmux_window_command(
+                &format!("tmux new-window -n {} -c {}", &trim_pane_name(&pick)?, &pick),
+                &pick,
+            )?;
         }
         Some((NEW_SESSION_SUBC, _)) => {
             let pick = pick_project(&config, "New session:")?;
             // spawn tmux session
-            let mut pane_name = get_pane_name(&pick)?;
-            let session_name = get_session_name(&pane_name);
-            execute_tmux_command(&format!(
-                "tmux new-session -d -s {} -n {} -c {}",
-                session_name, pane_name, &pick
-            ))?;
+            let mut pane_name = trim_pane_name(&pick)?;
+            let session_name = trim_session_name(&pane_name);
+            execute_tmux_window_command(
+                &format!(
+                    "tmux new-session -d -s {} -n {} -c {}",
+                    session_name, pane_name, &pick
+                ),
+                &pick,
+            )?;
             pane_name.retain(|x| x != '\'' && x != '\n');
             execute_tmux_command(&format!("tmux switch-client -t {}:1", session_name))?;
         }

@@ -2,7 +2,7 @@ use log::trace;
 
 use crate::{
     config::Config,
-    fs::{descend_recursive, expand},
+    fs::{get_included_paths_list, expand_path},
     fzf::execute_fzf_command,
     Error,
 };
@@ -28,10 +28,10 @@ pub(crate) fn pick_project(config: &Config, header: &'static str) -> Result<Stri
         let mut list = vec![];
         for include_entry in config.include.iter() {
             for path in &include_entry.paths {
-                let expanded_path = expand(path)?;
+                let expanded_path = expand_path(path)?;
                 // always include root of the tree
                 list.push(expanded_path.clone());
-                descend_recursive(&expanded_path, 0, &mut list, include_entry, config)?;
+                get_included_paths_list(&expanded_path, 0, &mut list, include_entry, config)?;
             }
         }
         list.join("\n")

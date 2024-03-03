@@ -18,8 +18,8 @@ pub(crate) struct Config<'a> {
     pub ignore: Vec<&'a str>,
     #[serde(default = "IncludeEntry::traverse_hidden_default")]
     pub traverse_hidden: bool,
-    #[serde(default = "IncludeEntry::stop_on_match_default")]
-    pub stop_on_match: bool,
+    #[serde(default = "IncludeEntry::stop_on_marker_default")]
+    pub stop_on_marker: bool,
     pub include: Vec<IncludeEntry<'a>>,
 }
 
@@ -36,7 +36,7 @@ impl<'a> ToString for Session<'a> {
             self.name,
             self.windows
                 .iter()
-                .map(|p| crate::fs::expand(p).unwrap_or(p.to_string()))
+                .map(|p| crate::fs::expand_path(p).unwrap_or(p.to_string()))
                 .collect::<Vec<_>>()
                 .join("\n")
         )
@@ -51,6 +51,8 @@ pub(crate) struct IncludeEntry<'a> {
     pub markers: Vec<&'a str>,
     #[serde(default = "IncludeEntry::use_root_markers_default")]
     pub use_root_markers: bool,
+    #[serde(default = "IncludeEntry::include_files_default")]
+    pub include_files: bool,
     #[serde(default)]
     pub ignore: Vec<&'a str>,
     #[serde(default = "IncludeEntry::use_root_ignore_default")]
@@ -58,7 +60,7 @@ pub(crate) struct IncludeEntry<'a> {
     #[serde(default)]
     pub show_hidden: Option<bool>,
     #[serde(default)]
-    pub stop_on_match: Option<bool>,
+    pub stop_on_marker: Option<bool>,
     #[serde(default = "u8::max_value")]
     pub depth: u8,
 }
@@ -95,11 +97,14 @@ impl<'a> IncludeEntry<'a> {
     fn traverse_hidden_default() -> bool {
         false
     }
-    fn stop_on_match_default() -> bool {
+    fn stop_on_marker_default() -> bool {
         true
     }
     fn markers_default() -> Vec<&'a str> {
         MARKERS_DEFAULT.to_vec()
+    }
+    fn include_files_default() -> bool {
+        false
     }
     fn ignore_default() -> Vec<&'a str> {
         IGNORE_DEFAULT.to_vec()
@@ -113,7 +118,7 @@ impl<'a> Default for Config<'a> {
             markers: IncludeEntry::markers_default(),
             ignore: IncludeEntry::ignore_default(),
             traverse_hidden: IncludeEntry::traverse_hidden_default(),
-            stop_on_match: IncludeEntry::stop_on_match_default(),
+            stop_on_marker: IncludeEntry::stop_on_marker_default(),
             include: vec![IncludeEntry {
                 paths: ["$HOME"].to_vec(),
                 ..Default::default()
