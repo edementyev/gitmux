@@ -183,7 +183,9 @@ pub(crate) fn cli() -> Result<(), super::Error> {
                     }
                     let mut iter = session.windows.iter();
                     let home = expand_path("$HOME")?;
-                    let first_pane = &expand_path(iter.next().unwrap_or(&home.as_str()))?;
+                    // TODO: create first session pane in loop
+                    let first_pane =
+                        &expand_path(iter.next().unwrap_or(&home.as_str()).trim_end_matches('/'))?;
                     // create session with first window
                     execute_tmux_window_command(
                         &format!(
@@ -195,7 +197,7 @@ pub(crate) fn cli() -> Result<(), super::Error> {
                         first_pane,
                     )?;
                     for pane in iter {
-                        let pane = &expand_path(pane)?;
+                        let pane = &expand_path(pane.trim_end_matches('/'))?;
                         let mut window = String::from_utf8(
                             execute_tmux_window_command(
                                 &format!(
