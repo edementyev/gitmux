@@ -194,7 +194,7 @@ pub(crate) fn cli() -> Result<(), super::Error> {
                             ),
                             // create window in current session
                             _ => format!(
-                                "tmux new-window -d -n {} -c {} -P -F '#S:#I'",
+                                "tmux new-window -d -n {} -P -F '#S:#I' -c {}",
                                 trim_window_name(window)?,
                                 window,
                             ),
