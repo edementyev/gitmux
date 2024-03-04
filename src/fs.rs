@@ -51,7 +51,7 @@ pub(crate) fn expand_path(path: &str) -> Result<String, Error> {
 }
 
 /// retains the tail of the path
-pub(crate) fn trim_pane_name(path: &str) -> Result<String, anyhow::Error> {
+pub(crate) fn trim_window_name(path: &str) -> Result<String, anyhow::Error> {
     let re = Regex::new(r"/(?P<first>[^/]+)/{1}(?P<second>[^/]+)$")?;
     let mut iter = re.captures_iter(path);
     if let Some(caps) = iter.next() {
@@ -65,10 +65,10 @@ pub(crate) fn trim_pane_name(path: &str) -> Result<String, anyhow::Error> {
     }
 }
 
-/// removes all dots from original string
+/// removes all dots from original name string
 /// (dots are displayed as underscores in session name for some reason)
-pub(crate) fn trim_session_name(pane_name: &String) -> String {
-    let mut s = String::from(pane_name);
+pub(crate) fn trim_session_name(name: &String) -> String {
+    let mut s = String::from(name);
     s.retain(|x| x != '.');
     s
 }

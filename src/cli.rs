@@ -2,7 +2,7 @@ use log::trace;
 use std::process;
 
 use crate::config::{read_config, Session};
-use crate::fs::{expand_path, trim_pane_name, trim_session_name};
+use crate::fs::{expand_path, trim_window_name, trim_session_name};
 use crate::selectors::{pick_project, select_from_list};
 use crate::tmux::{execute_tmux_command, execute_tmux_command_with_stdin, execute_tmux_window_command};
 
@@ -181,41 +181,36 @@ pub(crate) fn cli() -> Result<(), super::Error> {
                         println!("session {} exists", session.name);
                         continue;
                     }
-                    let mut iter = session.windows.iter();
-                    let home = expand_path("$HOME")?;
-                    // TODO: create first session pane in loop
-                    let first_pane =
-                        &expand_path(iter.next().unwrap_or(&home.as_str()).trim_end_matches('/'))?;
-                    // create session with first window
-                    execute_tmux_window_command(
-                        &format!(
-                            "tmux new-session -d -s {} -n {} -c {}",
-                            session.name,
-                            trim_pane_name(first_pane)?,
-                            first_pane,
-                        ),
-                        first_pane,
-                    )?;
-                    for pane in iter {
-                        let pane = &expand_path(pane.trim_end_matches('/'))?;
-                        let mut window = String::from_utf8(
-                            execute_tmux_window_command(
-                                &format!(
-                                    "tmux new-window -d -n {} -c {} -P -F '#S:#I'",
-                                    trim_pane_name(pane)?,
-                                    pane,
-                                ),
-                                pane,
-                            )?
-                            .stdout,
-                        )?;
-                        window.retain(|x| x != '\'' && x != '\n');
-                        execute_tmux_command(&format!(
-                            "tmux move-window -s {} -t {}:",
-                            window, session.name
-                        ))?;
+                    let iter = session.windows.iter();
+                    for (i, window) in iter.enumerate() {
+                        let window = &expand_path(window.trim_end_matches('/'))?;
+                        let cmd = &match i {
+                            // create session with first window
+                            0 => format!(
+                                "tmux new-session -d -s {} -n {} -c {}",
+                                session.name,
+                                trim_window_name(window)?,
+                                window,
+                            ),
+                            // create window in current session
+                            _ => format!(
+                                "tmux new-window -d -n {} -c {} -P -F '#S:#I'",
+                                trim_window_name(window)?,
+                                window,
+                            ),
+                        };
+                        let mut window = String::from_utf8(execute_tmux_window_command(cmd, window)?.stdout)?;
+
+                        // move consequent windows to new session
+                        if i > 0 {
+                            window.retain(|x| x != '\'' && x != '\n');
+                            execute_tmux_command(&format!(
+                                "tmux move-window -s {} -t {}:",
+                                window, session.name
+                            ))?;
+                        }
                     }
-                    // renumber panes with no-op move
+                    // renumber windows with no-op move
                     execute_tmux_command(&format!(
                         "tmux movew -r -s {}:1 -t {}:1",
                         session.name, session.name
@@ -227,23 +222,23 @@ pub(crate) fn cli() -> Result<(), super::Error> {
         Some((NEW_WINDOW_SUBC, _)) => {
             let pick = pick_project(&config, "New window:")?;
             execute_tmux_window_command(
-                &format!("tmux new-window -n {} -c {}", &trim_pane_name(&pick)?, &pick),
+                &format!("tmux new-window -n {} -c {}", &trim_window_name(&pick)?, &pick),
                 &pick,
             )?;
         }
         Some((NEW_SESSION_SUBC, _)) => {
             let pick = pick_project(&config, "New session:")?;
             // spawn tmux session
-            let mut pane_name = trim_pane_name(&pick)?;
-            let session_name = trim_session_name(&pane_name);
+            let mut window_name = trim_window_name(&pick)?;
+            let session_name = trim_session_name(&window_name);
             execute_tmux_window_command(
                 &format!(
                     "tmux new-session -d -s {} -n {} -c {}",
-                    session_name, pane_name, &pick
+                    session_name, window_name, &pick
                 ),
                 &pick,
             )?;
-            pane_name.retain(|x| x != '\'' && x != '\n');
+            window_name.retain(|x| x != '\'' && x != '\n');
             execute_tmux_command(&format!("tmux switch-client -t {}:1", session_name))?;
         }
         // no subcommand
