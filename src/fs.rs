@@ -113,8 +113,8 @@ pub(crate) fn get_included_paths_list(
         if markers.contains(&"*") || markers.contains(&name.as_str()) {
             trace!("match found {}", path);
             include_this_path = true;
-            // stop_on_marker prevents from descending further than current directory
-            if include_entry.stop_on_marker.unwrap_or(config.stop_on_marker) {
+            // stop_on_dir_match prevents from descending further than current directory
+            if include_entry.stop_on_dir_match.unwrap_or(config.stop_on_dir_match) {
                 return Ok(include_this_path);
             }
             break;

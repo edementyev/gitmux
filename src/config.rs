@@ -18,8 +18,8 @@ pub(crate) struct Config<'a> {
     pub ignore: Vec<&'a str>,
     #[serde(default = "IncludeEntry::traverse_hidden_default")]
     pub traverse_hidden: bool,
-    #[serde(default = "IncludeEntry::stop_on_marker_default")]
-    pub stop_on_marker: bool,
+    #[serde(default = "IncludeEntry::stop_on_dir_match_default")]
+    pub stop_on_dir_match: bool,
     pub include: Vec<IncludeEntry<'a>>,
 }
 
@@ -60,7 +60,7 @@ pub(crate) struct IncludeEntry<'a> {
     #[serde(default)]
     pub show_hidden: Option<bool>,
     #[serde(default)]
-    pub stop_on_marker: Option<bool>,
+    pub stop_on_dir_match: Option<bool>,
     #[serde(default = "u8::max_value")]
     pub depth: u8,
 }
@@ -97,7 +97,7 @@ impl<'a> IncludeEntry<'a> {
     fn traverse_hidden_default() -> bool {
         false
     }
-    fn stop_on_marker_default() -> bool {
+    fn stop_on_dir_match_default() -> bool {
         true
     }
     fn markers_default() -> Vec<&'a str> {
@@ -118,7 +118,7 @@ impl<'a> Default for Config<'a> {
             markers: IncludeEntry::markers_default(),
             ignore: IncludeEntry::ignore_default(),
             traverse_hidden: IncludeEntry::traverse_hidden_default(),
-            stop_on_marker: IncludeEntry::stop_on_marker_default(),
+            stop_on_dir_match: IncludeEntry::stop_on_dir_match_default(),
             include: vec![IncludeEntry {
                 paths: ["$HOME"].to_vec(),
                 ..Default::default()
