@@ -36,7 +36,7 @@ impl<'a> ToString for Session<'a> {
             self.name,
             self.windows
                 .iter()
-                .map(|p| crate::fs::expand_path(p).unwrap_or(p.to_string()))
+                .map(|p| crate::fs::expand(p).unwrap_or(p.to_string()))
                 .collect::<Vec<_>>()
                 .join("\n")
         )

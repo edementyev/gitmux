@@ -2,7 +2,7 @@ use log::trace;
 use std::process;
 
 use crate::config::{read_config, Session};
-use crate::fs::{expand_path, trim_window_name, trim_session_name};
+use crate::fs::{expand, trim_session_name, trim_window_name};
 use crate::selectors::{pick_project, select_from_list};
 use crate::tmux::{execute_tmux_command, execute_tmux_command_with_stdin, execute_tmux_window_command};
 
@@ -58,7 +58,7 @@ pub(crate) fn cli() -> Result<(), super::Error> {
     let help = cmd.render_help();
     let arg_matches = cmd.get_matches();
 
-    let path = expand_path(
+    let path = expand(
         arg_matches
             .get_one::<String>(CONFIG_ARG)
             .ok_or_else(|| super::Error::CmdArg(format!("error: wrong type used for {}", CONFIG_ARG)))?,
@@ -183,7 +183,7 @@ pub(crate) fn cli() -> Result<(), super::Error> {
                     }
                     let iter = session.windows.iter();
                     for (i, window) in iter.enumerate() {
-                        let window = &expand_path(window.trim_end_matches('/'))?;
+                        let window = &expand(window.trim_end_matches('/'))?;
                         let cmd = &match i {
                             // create session with first window
                             0 => format!(

@@ -13,7 +13,7 @@ use std::iter::Chain;
 
 const EMPTY_STR: &str = "";
 
-/// tries to expand env variables in path
+/// tries to expand env variables in string
 pub(crate) fn expand(path: &str) -> Result<String, Error> {
     let re = Regex::new(r"\$\{?([^\}/]+)\}?")?;
     let mut errors: Vec<(VarError, String)> = Vec::new();
@@ -21,31 +21,15 @@ pub(crate) fn expand(path: &str) -> Result<String, Error> {
         .replace_all(path, |captures: &Captures| match &captures[1] {
             EMPTY_STR => EMPTY_STR.to_string(),
             varname => env::var(OsStr::new(varname))
-                .map_err(|e| errors.push((e, varname.to_owned())))
+                .map_err(|e| {
+                    errors.push((e.clone(), varname.to_owned()));
+                    e
+                })
                 .unwrap_or_default(),
         })
         .into();
-    if let Some(error_tuple) = errors.pop() {
-        return Err(Error::EnvVar(error_tuple.0, error_tuple.1));
-    }
-    Ok(result)
-}
-
-/// tries to expand env variables in path
-pub(crate) fn expand_path(path: &str) -> Result<String, Error> {
-    let re = Regex::new(r"\$\{?([^\}/]+)\}?")?;
-    let mut errors: Vec<(VarError, String)> = Vec::new();
-    let result: String = re
-        .replace_all(path, |captures: &Captures| match &captures[1] {
-            EMPTY_STR => EMPTY_STR.to_string(),
-            varname => env::var(OsStr::new(varname))
-                .map_err(|e| errors.push((e, varname.to_owned())))
-                // TODO: check that this variable expands to some valid path
-                .unwrap_or_default(),
-        })
-        .into();
-    if let Some(error_tuple) = errors.pop() {
-        return Err(Error::EnvVar(error_tuple.0, error_tuple.1));
+    if let Some(error_tuple) = errors.last() {
+        return Err(Error::EnvVar(error_tuple.0.clone(), error_tuple.1.clone()));
     }
     Ok(result)
 }
@@ -66,7 +50,7 @@ pub(crate) fn trim_window_name(path: &str) -> Result<String, anyhow::Error> {
 }
 
 /// removes all dots from original name string
-/// (dots are displayed as underscores in session name for some reason)
+/// (needed because dots are displayed as underscores in session name for some reason)
 pub(crate) fn trim_session_name(name: &String) -> String {
     let mut s = String::from(name);
     s.retain(|x| x != '.');
@@ -114,7 +98,10 @@ pub(crate) fn get_included_paths_list(
             trace!("match found {}", path);
             include_this_path = true;
             // stop_on_dir_match prevents from descending further than current directory
-            if include_entry.stop_on_dir_match.unwrap_or(config.stop_on_dir_match) {
+            if include_entry
+                .stop_on_dir_match
+                .unwrap_or(config.stop_on_dir_match)
+            {
                 return Ok(include_this_path);
             }
             break;
