@@ -3,13 +3,13 @@ use crate::Error;
 
 use anyhow::anyhow;
 use log::{error, trace};
-use regex::{Captures, Regex};
+use regex::{Captures, Regex, RegexSet};
 
 use std::env::{self, VarError};
 use std::ffi::OsStr;
 use std::fs::DirEntry;
 use std::fs::{self, FileType};
-use std::iter::Chain;
+use std::path::PathBuf;
 
 const EMPTY_STR: &str = "";
 
@@ -59,8 +59,8 @@ pub(crate) fn trim_session_name(name: &String) -> String {
 
 /// receives path, mutable list and config
 /// updates list with entries from the path tree that should be included
-/// on intermediate steps, returns include_this_path (whether to include current path in result list)
-/// if any child path is included in result list, parent path (../) will also be included
+/// on intermediate steps, returns path_yields (indicates that this path yielded matches)
+/// intermediate paths are included if include_intermediate_paths = true
 pub(crate) fn get_included_paths_list(
     path: &str,
     depth: u8,
@@ -68,7 +68,9 @@ pub(crate) fn get_included_paths_list(
     include_entry: &IncludeEntry,
     config: &Config,
 ) -> Result<bool, Error> {
-    let mut include_this_path = false;
+    let mut path_yields = false;
+
+    // read current path contents
     let read_dir = match std::fs::read_dir(path) {
         Ok(read) => read,
         Err(err) => {
@@ -77,61 +79,183 @@ pub(crate) fn get_included_paths_list(
         }
     };
     let dir_contents = read_dir.flatten().collect::<Vec<DirEntry>>();
-    let markers_chain = include_entry
-        .markers
-        .iter()
-        .chain(if include_entry.use_root_markers {
-            config.markers.iter()
-        } else {
-            [].iter()
-        });
-    let markers = markers_chain.copied().collect::<Vec<&str>>();
 
-    // search current dir for markers
-    for entry in dir_contents.iter() {
-        let name = entry
-            .file_name()
-            .to_str()
-            .ok_or_else(|| anyhow!("entry is not utf8 string: {:#?}", entry.file_name()))?
-            .to_string();
-        if markers.contains(&"*") || markers.contains(&name.as_str()) {
-            trace!("match found {}", path);
-            include_this_path = true;
-            // stop_on_dir_match prevents from descending further than current directory
-            if include_entry
-                .stop_on_dir_match
-                .unwrap_or(config.stop_on_dir_match)
-            {
-                return Ok(include_this_path);
-            }
-            break;
-        }
-    }
-
-    // reached maximum depth and do not need to include files?
-    if depth >= include_entry.depth && !include_entry.include_files {
-        return Ok(include_this_path);
-    }
-
-    // read dir contents
-    let mut children = vec![];
-    for entry in dir_contents.iter() {
-        let name = entry
-            .file_name()
-            .to_str()
-            .ok_or_else(|| anyhow!("entry is not utf8 string: {:#?}", entry.file_name()))?
-            .to_string();
-        let ignore_chain = include_entry
-            .ignore
+    // build markers lists
+    let markers_exact_chain =
+        include_entry
+            .markers
+            .exact
             .iter()
-            .chain(if include_entry.use_root_ignore {
-                config.ignore.iter()
+            .chain(if include_entry.markers.chain_root_markers {
+                config.markers.exact.iter()
             } else {
                 [].iter()
             });
-        if (include_entry.show_hidden.unwrap_or(config.traverse_hidden) || !start_with_dot(&name))
-            && !is_in_ignore(&name, ignore_chain.clone())
+    let markers_exact = markers_exact_chain.copied().collect::<Vec<&str>>();
+    let markers_pattern_chain =
+        include_entry
+            .markers
+            .pattern
+            .iter()
+            .chain(if include_entry.markers.chain_root_markers {
+                config.markers.pattern.iter()
+            } else {
+                [].iter()
+            });
+    let markers_pattern = markers_pattern_chain.copied().collect::<Vec<&str>>();
+    let markers_regex_set = RegexSet::new(markers_pattern)?;
+
+    // do the thing according to chosen mode
+    match include_entry.mode {
+        crate::config::Mode::Dir => {
+            // 1 - scan dir for markers
+            // found marker -> include this dir in output (if yield_on_marker = true, this is the end of current path's branch)
+            // reached max depth (depth = number of steps) -> return
+            // 2 - start traversing its children
+
+            // search current dir for markers
+            for entry in dir_contents.iter() {
+                let name = entry
+                    .file_name()
+                    .to_str()
+                    .ok_or_else(|| anyhow!("entry is not utf8 string: {:#?}", entry.file_name()))?
+                    .to_string();
+                if markers_exact.contains(&name.as_str())
+                    || markers_regex_set.matches(name.as_str()).len() > 0
+                {
+                    trace!("match found {}", path);
+                    // yield_on_marker stops descending further down the fs tree
+                    path_yields = true;
+                    if include_entry.yield_on_marker {
+                        output.push(path.to_string());
+                        return Ok(path_yields);
+                    }
+                    break;
+                }
+            }
+
+            if depth >= include_entry.depth {
+                // reached maximum depth -> return
+                return Ok(path_yields);
+            }
+
+            let mut children = vec![];
+
+            let entries = get_not_ignored_dir_entries(include_entry, dir_contents, config)?;
+            for (path, ft) in entries {
+                // entry is a dir and is not ignored
+                if is_dir(&path, &ft)? {
+                    // -> add it to the list of children to traverse on next step
+                    children.push(path);
+                }
+            }
+
+            // walk current dir's children
+            for child in children {
+                // if child yields matches
+                if get_included_paths_list(&child, depth + 1, output, include_entry, config)? {
+                    path_yields = true;
+                };
+            }
+
+            // if path yields matches and we include every step of the final match, include this path
+            if path_yields && include_entry.include_intermediate_paths {
+                output.push(path.to_string());
+            }
+
+            Ok(path_yields)
+        }
+        crate::config::Mode::File => {
+            // iterate through dir contents
+            // add all unignored files
+            // collect directories
+            let mut children = vec![];
+
+            let entries = get_not_ignored_dir_entries(include_entry, dir_contents, config)?;
+            for (path, ft) in entries {
+                // entry is a dir and is not ignored
+                if is_dir(&path, &ft)? {
+                    // -> add it to the list of children to traverse on next step
+                    children.push(path);
+                // entry is a file and include_files flag is on
+                } else if is_file(&path, &ft)? {
+                    // -> add file to the list of included paths
+                    path_yields = true;
+                    output.push(path);
+                }
+            }
+
+            // reached maximum depth -> return
+            if depth >= include_entry.depth {
+                return Ok(path_yields);
+            }
+
+            // walk current dir's children
+            for child in children {
+                // if child yields matches
+                if get_included_paths_list(&child, depth + 1, output, include_entry, config)? {
+                    path_yields = true;
+                };
+            }
+
+            // if path yields matches and we include every step of the final match, include this path
+            if path_yields && include_entry.include_intermediate_paths {
+                output.push(path.to_string());
+            }
+
+            Ok(path_yields)
+        }
+    }
+}
+
+fn get_not_ignored_dir_entries(
+    include_entry: &IncludeEntry,
+    dir_contents: Vec<DirEntry>,
+    config: &Config,
+) -> Result<Vec<(String, FileType)>, Error> {
+    // build ignore lists
+    let ignore_exact_chain =
+        include_entry
+            .ignore
+            .exact
+            .iter()
+            .chain(if include_entry.ignore.chain_root_ignore {
+                config.ignore.exact.iter()
+            } else {
+                [].iter()
+            });
+    let ignore_exact = ignore_exact_chain.copied().collect::<Vec<&str>>();
+    let ignore_pattern_chain =
+        include_entry
+            .ignore
+            .pattern
+            .iter()
+            .chain(if include_entry.ignore.chain_root_ignore {
+                config.ignore.pattern.iter()
+            } else {
+                [].iter()
+            });
+    let ignore_pattern = ignore_pattern_chain.copied().collect::<Vec<&str>>();
+    let ignore_regex_set = RegexSet::new(ignore_pattern)?;
+
+    let mut result: Vec<(String, FileType)> = vec![];
+    // iterate through dir contents
+    for entry in dir_contents.iter() {
+        // get entry(dir/file) name
+        let name = entry
+            .file_name()
+            .to_str()
+            .ok_or_else(|| anyhow!("entry is not utf8 string: {:#?}", entry.file_name()))?
+            .to_string();
+        // check if entry should be ignored
+        // name is not dotfile/dir or we accept dotfiles/dirs
+        if (!name.starts_with('.') || include_entry.markers.traverse_hidden)
+            // name is not in ignore_exact list
+            && !ignore_exact.contains(&name.as_str())
+            // name does not match any ignore_pattern
+            && ignore_regex_set.matches(&name).len() == 0
         {
+            // get path
             let path = match get_path_string(entry) {
                 Ok(p) => p,
                 Err(err) => {
@@ -139,42 +263,18 @@ pub(crate) fn get_included_paths_list(
                     continue;
                 }
             };
-            let ft = &(match entry.file_type() {
+            // get filetype
+            let ft = match entry.file_type() {
                 Ok(ft) => ft,
                 Err(err) => {
                     error!("error getting filetype: {:#?}", err);
                     continue;
                 }
-            });
-            // entry is a file
-            // and include_files flag is on
-            if is_file(entry, ft)? && include_entry.include_files {
-                // add file to the list of included paths
-                output.push(path);
-            // and entry is a dir
-            // and is not ignored
-            } else if is_dir(entry, ft)? {
-                // add to list of children to traverse next
-                children.push(path);
-            }
+            };
+            result.push((path, ft))
         }
     }
-
-    // reached maximum depth (after possibly including files)
-    if depth >= include_entry.depth {
-        return Ok(include_this_path);
-    }
-
-    // walk current dir's children
-    for child in children {
-        if get_included_paths_list(&child, depth + 1, output, include_entry, config)? {
-            output.push(child);
-            // if child is included, also include parent
-            include_this_path = true;
-        };
-    }
-    // current entry's parent will be included also
-    Ok(include_this_path)
+    Ok(result)
 }
 
 fn get_path_string(entry: &DirEntry) -> Result<String, anyhow::Error> {
@@ -183,22 +283,10 @@ fn get_path_string(entry: &DirEntry) -> Result<String, anyhow::Error> {
     })?))
 }
 
-pub(crate) fn is_in_ignore(
-    name: &str,
-    ignore_dirs: Chain<std::slice::Iter<&str>, std::slice::Iter<&str>>,
-) -> bool {
-    for ignore_pat in ignore_dirs {
-        if *ignore_pat == name {
-            return true;
-        }
-    }
-    false
-}
-
-pub(crate) fn is_dir(entry: &DirEntry, ft: &FileType) -> Result<bool, std::io::Error> {
+pub(crate) fn is_dir(path: &str, ft: &FileType) -> Result<bool, std::io::Error> {
     if ft.is_symlink() {
         // read link and read its ft
-        Ok(read_link(entry)
+        Ok(read_link(path)
             .as_deref()
             .map(std::path::Path::is_dir)
             .unwrap_or(false))
@@ -207,10 +295,10 @@ pub(crate) fn is_dir(entry: &DirEntry, ft: &FileType) -> Result<bool, std::io::E
     }
 }
 
-pub(crate) fn is_file(entry: &DirEntry, ft: &FileType) -> Result<bool, std::io::Error> {
+pub(crate) fn is_file(path: &str, ft: &FileType) -> Result<bool, std::io::Error> {
     if ft.is_symlink() {
         // read link and read its ft
-        Ok(read_link(entry)
+        Ok(read_link(path)
             .as_deref()
             .map(std::path::Path::is_file)
             .unwrap_or(false))
@@ -220,8 +308,8 @@ pub(crate) fn is_file(entry: &DirEntry, ft: &FileType) -> Result<bool, std::io::
 }
 
 // readlink and convert result to option, dropping error
-fn read_link(entry: &DirEntry) -> Option<std::path::PathBuf> {
-    match fs::read_link(entry.path().as_path()) {
+fn read_link(path: &str) -> Option<std::path::PathBuf> {
+    match fs::read_link(PathBuf::from(path)) {
         Ok(rl) => Some(rl),
         Err(err) => {
             error!("error reading link: {:#?}", err);
@@ -230,11 +318,7 @@ fn read_link(entry: &DirEntry) -> Option<std::path::PathBuf> {
     }
 }
 
-pub(crate) fn start_with_dot(name: &str) -> bool {
-    name.starts_with('.')
-}
-
-pub(crate) fn is_file_str(path: &str) -> bool {
+pub(crate) fn path_is_file(path: &str) -> bool {
     let meta = std::fs::metadata(path);
     match meta {
         Ok(meta) => meta.is_file(),

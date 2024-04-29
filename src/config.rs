@@ -12,15 +12,25 @@ pub(crate) enum ConfigError {
 pub(crate) struct Config<'a> {
     #[serde(default)]
     pub sessions: Vec<Session<'a>>,
-    #[serde(default = "IncludeEntry::markers_default", borrow = "'a")]
-    pub markers: Vec<&'a str>,
-    #[serde(default = "IncludeEntry::ignore_default")]
-    pub ignore: Vec<&'a str>,
-    #[serde(default = "IncludeEntry::traverse_hidden_default")]
-    pub traverse_hidden: bool,
-    #[serde(default = "IncludeEntry::stop_on_dir_match_default")]
-    pub stop_on_dir_match: bool,
+    #[serde(default, borrow = "'a")]
+    pub markers: Markers<'a>,
+    #[serde(default)]
+    pub ignore: Ignore<'a>,
     pub include: Vec<IncludeEntry<'a>>,
+}
+
+impl<'a> Default for Config<'a> {
+    fn default() -> Self {
+        Self {
+            sessions: vec![],
+            markers: Markers::default(),
+            ignore: Ignore::default(),
+            include: vec![IncludeEntry {
+                paths: ["$HOME"].to_vec(),
+                ..Default::default()
+            }],
+        }
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -43,29 +53,99 @@ impl<'a> ToString for Session<'a> {
     }
 }
 
-#[derive(Deserialize, Debug, Default)]
+fn default_yield_on_marker() -> bool {
+    true
+}
+
+fn default_include_intermediate_paths() -> bool {
+    true
+}
+
+#[derive(Deserialize, Debug)]
 pub(crate) struct IncludeEntry<'a> {
     #[serde(borrow = "'a")]
     pub paths: Vec<&'a str>,
     #[serde(default)]
-    pub markers: Vec<&'a str>,
-    #[serde(default = "IncludeEntry::use_root_markers_default")]
-    pub use_root_markers: bool,
-    #[serde(default = "IncludeEntry::include_files_default")]
-    pub include_files: bool,
+    pub mode: Mode,
     #[serde(default)]
-    pub ignore: Vec<&'a str>,
-    #[serde(default = "IncludeEntry::use_root_ignore_default")]
-    pub use_root_ignore: bool,
+    pub markers: Markers<'a>,
     #[serde(default)]
-    pub show_hidden: Option<bool>,
-    #[serde(default)]
-    pub stop_on_dir_match: Option<bool>,
+    pub ignore: Ignore<'a>,
+    #[serde(default = "default_include_intermediate_paths")]
+    pub include_intermediate_paths: bool,
+    #[serde(default = "default_yield_on_marker")]
+    pub yield_on_marker: bool,
     #[serde(default = "u8::max_value")]
     pub depth: u8,
 }
 
-const IGNORE_DEFAULT: [&str; 11] = [
+impl<'a> Default for IncludeEntry<'a> {
+    fn default() -> Self {
+        Self {
+            paths: vec![],
+            mode: Mode::Dir,
+            markers: Markers::default(),
+            ignore: Ignore::default(),
+            include_intermediate_paths: default_include_intermediate_paths(),
+            yield_on_marker: default_yield_on_marker(),
+            depth: u8::max_value(),
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "snake_case")]
+// #[serde(untagged)]
+pub(crate) enum Mode {
+    #[default]
+    Dir,
+    File,
+}
+
+const MARKERS_EXACT_DEFAULT: [&str; 3] = [
+    ".git",
+    "Cargo.toml",
+    "go.mod",
+    // "package.json",
+    // "pom.xml",
+    // "build.gradle",
+];
+
+const MARKERS_PATTERN_DEFAULT: [&str; 0] = [];
+
+fn default_traverse_hidden() -> bool {
+    true
+}
+
+fn default_chain_root_markers() -> bool {
+    true
+}
+
+#[derive(Deserialize, Debug)]
+pub(crate) struct Markers<'a> {
+    #[serde(default, borrow = "'a")]
+    pub exact: Vec<&'a str>,
+    #[serde(default)]
+    pub pattern: Vec<&'a str>,
+    #[serde(default = "default_traverse_hidden")]
+    pub traverse_hidden: bool,
+    #[serde(default = "default_chain_root_markers")]
+    pub chain_root_markers: bool,
+}
+
+impl<'a> Default for Markers<'a> {
+    fn default() -> Self {
+        Markers {
+            exact: Vec::from(MARKERS_EXACT_DEFAULT),
+            pattern: Vec::from(MARKERS_PATTERN_DEFAULT),
+            chain_root_markers: default_chain_root_markers(),
+            traverse_hidden: default_traverse_hidden(),
+        }
+    }
+}
+
+const IGNORE_EXACT_DEFAULT: [&str; 12] = [
+    ".DS_Store",
     "node_modules",
     "venv",
     "bin",
@@ -78,51 +158,28 @@ const IGNORE_DEFAULT: [&str; 11] = [
     "docs",
     "pkg",
 ];
+const IGNORE_PATTERN_DEFAULT: [&str; 0] = [];
 
-const MARKERS_DEFAULT: [&str; 2] = [
-    ".git",
-    "Cargo.toml",
-    // "package.json",
-    // "pom.xml",
-    // "build.gradle",
-];
-
-impl<'a> IncludeEntry<'a> {
-    fn use_root_ignore_default() -> bool {
-        true
-    }
-    fn use_root_markers_default() -> bool {
-        true
-    }
-    fn traverse_hidden_default() -> bool {
-        false
-    }
-    fn stop_on_dir_match_default() -> bool {
-        true
-    }
-    fn markers_default() -> Vec<&'a str> {
-        MARKERS_DEFAULT.to_vec()
-    }
-    fn include_files_default() -> bool {
-        false
-    }
-    fn ignore_default() -> Vec<&'a str> {
-        IGNORE_DEFAULT.to_vec()
-    }
+fn default_chain_root_ignore() -> bool {
+    true
 }
 
-impl<'a> Default for Config<'a> {
+#[derive(Deserialize, Debug)]
+pub(crate) struct Ignore<'a> {
+    #[serde(default, borrow = "'a")]
+    pub exact: Vec<&'a str>,
+    #[serde(default)]
+    pub pattern: Vec<&'a str>,
+    #[serde(default = "default_chain_root_ignore")]
+    pub chain_root_ignore: bool,
+}
+
+impl<'a> Default for Ignore<'a> {
     fn default() -> Self {
-        Self {
-            sessions: vec![],
-            markers: IncludeEntry::markers_default(),
-            ignore: IncludeEntry::ignore_default(),
-            traverse_hidden: IncludeEntry::traverse_hidden_default(),
-            stop_on_dir_match: IncludeEntry::stop_on_dir_match_default(),
-            include: vec![IncludeEntry {
-                paths: ["$HOME"].to_vec(),
-                ..Default::default()
-            }],
+        Ignore {
+            exact: Vec::from(IGNORE_EXACT_DEFAULT),
+            pattern: Vec::from(IGNORE_PATTERN_DEFAULT),
+            chain_root_ignore: default_chain_root_ignore(),
         }
     }
 }

@@ -14,6 +14,7 @@ static CONFIG_PATH_DEFAULT: &str = "${XDG_CONFIG_HOME}/pfp/config.json";
 const KILL_SESSION_SUBC: &str = "kill-session";
 const SESSIONS_SUBC: &str = "sessions";
 const START_SUBC: &str = "start";
+const PRINT_CONFIG_SUBC: &str = "print-config";
 const NEW_SESSION_SUBC: &str = "new-session";
 const NEW_WINDOW_SUBC: &str = "new-window";
 
@@ -33,6 +34,7 @@ pub(crate) fn cli() -> Result<(), super::Error> {
                 .value_name("FILE")
                 .help("config file full path"),
         )
+        .subcommand(clap::Command::new(PRINT_CONFIG_SUBC).about("Print parsed config to stdout"))
         .subcommand(clap::Command::new(NEW_SESSION_SUBC).about("Pick a path and create new tmux session"))
         .subcommand(clap::Command::new(NEW_WINDOW_SUBC).about("Pick a path and create new tmux window"))
         .subcommand(
@@ -89,6 +91,9 @@ pub(crate) fn cli() -> Result<(), super::Error> {
                 execute_tmux_command("tmux switch-client -p")?;
             }
             execute_tmux_command(&format!("tmux kill-session -t {}", session_name,))?;
+        }
+        Some((PRINT_CONFIG_SUBC, _)) => {
+            println!("{:#?}", config)
         }
         Some((SESSIONS_SUBC, _)) => {
             let mut current_session =
