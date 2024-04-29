@@ -29,8 +29,9 @@ pub(crate) fn pick_project(config: &Config, header: &'static str) -> Result<Stri
         for include_entry in config.include.iter() {
             for path in &include_entry.paths {
                 let expanded_path = expand(path)?;
-                // always include root of the tree
-                list.push(expanded_path.clone());
+                if include_entry.include_intermediate_paths {
+                    list.push(expanded_path.clone());
+                }
                 get_included_paths_list(&expanded_path, 0, &mut list, include_entry, config)?;
             }
         }
