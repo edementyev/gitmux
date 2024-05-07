@@ -5,6 +5,7 @@ use anyhow::anyhow;
 use log::{error, trace};
 use regex::{Captures, Regex, RegexSet};
 
+use std::collections::HashMap;
 use std::env::{self, VarError};
 use std::ffi::OsStr;
 use std::fs::DirEntry;
@@ -64,7 +65,7 @@ pub(crate) fn trim_session_name(name: &String) -> String {
 pub(crate) fn get_included_paths_list(
     path: &str,
     depth: u8,
-    output: &mut Vec<String>,
+    output: &mut HashMap<String, ()>,
     include_entry: &IncludeEntry,
     config: &Config,
 ) -> Result<bool, Error> {
@@ -127,7 +128,7 @@ pub(crate) fn get_included_paths_list(
                     // yield_on_marker stops descending further down the fs tree
                     path_yields = true;
                     if include_entry.yield_on_marker {
-                        output.push(path.to_string());
+                        output.insert(path.to_string(), ());
                         return Ok(path_yields);
                     }
                     break;
@@ -163,7 +164,7 @@ pub(crate) fn get_included_paths_list(
 
             // if path yields matches and we include every step of the final match, include this path
             if path_yields && include_entry.include_intermediate_paths {
-                output.push(path.to_string());
+                output.insert(path.to_string(), ());
             }
 
             Ok(path_yields)
@@ -184,7 +185,7 @@ pub(crate) fn get_included_paths_list(
                 } else if is_file(&path, &ft)? {
                     // -> add file to the list of included paths
                     path_yields = true;
-                    output.push(path);
+                    output.insert(path, ());
                 }
             }
 
@@ -203,7 +204,7 @@ pub(crate) fn get_included_paths_list(
 
             // if path yields matches and we include every step of the final match, include this path
             if path_yields && include_entry.include_intermediate_paths {
-                output.push(path.to_string());
+                output.insert(path.to_string(), ());
             }
 
             Ok(path_yields)

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use log::trace;
 
 use crate::{
@@ -25,17 +27,17 @@ pub(crate) fn select_from_list(
 pub(crate) fn pick_project(config: &Config, header: &'static str) -> Result<String, Error> {
     // get dirs' paths
     let dirs = {
-        let mut list = vec![];
+        let mut paths_set = HashMap::new();
         for include_entry in config.include.iter() {
             for path in &include_entry.paths {
                 let expanded_path = expand(path)?;
                 if include_entry.include_intermediate_paths {
-                    list.push(expanded_path.clone());
+                    paths_set.insert(expanded_path.clone(), ());
                 }
-                get_included_paths_list(&expanded_path, 0, &mut list, include_entry, config)?;
+                get_included_paths_list(&expanded_path, 0, &mut paths_set, include_entry, config)?;
             }
         }
-        list.join("\n")
+        paths_set.into_keys().collect::<Vec<String>>().join("\n")
     };
 
     // pick one from list with fzf
