@@ -135,6 +135,9 @@ pub(crate) fn get_included_paths_list(
             }
 
             if depth >= include_entry.depth {
+                if path_yields {
+                    output.insert(path.to_string(), ());
+                }
                 // reached maximum depth -> return
                 return Ok(path_yields);
             }
